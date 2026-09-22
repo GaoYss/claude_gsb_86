@@ -40,18 +40,18 @@ watch(
       <ReservoirSelect v-model="filters.reservoir_id" allow-all />
     </div>
     <div class="filter-field">
-      <span>隐患类别</span>
+      <span>部位</span>
       <select v-model="filters.category" class="select">
-        <option value="">全部</option>
+        <option value="">全部部位</option>
         <option v-for="item in dictionary.options('structure_part')" :key="item.value" :value="item.value">
           {{ item.label }}
         </option>
       </select>
     </div>
     <div class="filter-field">
-      <span>隐患等级</span>
+      <span>等级</span>
       <select v-model="filters.severity" class="select">
-        <option value="">全部</option>
+        <option value="">全部等级</option>
         <option v-for="item in dictionary.options('hazard_severity')" :key="item.value" :value="item.value">
           {{ item.label }}
         </option>
@@ -60,11 +60,19 @@ watch(
     <div class="filter-field">
       <span>整改状态</span>
       <select v-model="filters.status" class="select">
-        <option value="">全部</option>
+        <option value="">全部状态</option>
         <option v-for="item in dictionary.options('hazard_status')" :key="item.value" :value="item.value">
           {{ item.label }}
         </option>
       </select>
+    </div>
+    <div class="filter-field" style="min-width: 140px">
+      <span>发现日期从</span>
+      <input v-model="filters.discovered_from" class="input" type="date" />
+    </div>
+    <div class="filter-field" style="min-width: 140px">
+      <span>到</span>
+      <input v-model="filters.discovered_to" class="input" type="date" />
     </div>
     <div class="filter-field" style="min-width: 120px">
       <span>范围</span>
@@ -78,8 +86,7 @@ watch(
       </label>
     </div>
     <template #actions>
-      <button class="btn" type="button" @click="emit('reset')">重置筛选</button>
+      <button class="btn" type="button" @click="emit('reset')">清空条件</button>
     </template>
   </FilterBar>
 </template>
-

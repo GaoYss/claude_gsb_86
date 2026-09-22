@@ -39,7 +39,11 @@ async function submit(payload) {
       ? await updateHazard(route.params.id, payload)
       : await createHazard(payload)
     toast.success(isEdit.value ? '隐患信息已更新' : `隐患 ${saved.code} 已登记`)
-    router.replace({ name: 'hazard-detail', params: { id: saved.id } })
+    router.replace({
+      name: 'hazard-detail',
+      params: { id: saved.id },
+      query: { ...route.query },
+    })
   } catch (error) {
     toast.error(error.message)
   } finally {

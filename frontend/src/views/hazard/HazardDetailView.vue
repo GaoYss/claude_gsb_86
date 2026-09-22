@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { addRectification, deleteHazard, fetchHazard, transitionHazard } from '@/api/hazards'
@@ -73,6 +73,10 @@ async function remove() {
     toast.error(error.message)
   }
 }
+
+// 从列表下钻时筛选条件挂在 query 上，返回时原样带回；直接访问详情页则回到默认列表
+const listTarget = computed(() => ({ name: 'hazard-list', query: { ...route.query } }))
+const hasListContext = computed(() => Object.keys(route.query).length > 0)
 </script>
 
 <template>
@@ -88,7 +92,13 @@ async function remove() {
         <span v-if="hazard.is_overdue" class="tag tag-overdue">逾期未整改</span>
       </template>
       <template #actions>
-        <RouterLink class="btn" :to="`/hazards/${hazard.id}/edit`">编辑</RouterLink>
+        <RouterLink class="btn" :to="listTarget">
+          ← 返回隐患列表<span v-if="hasListContext">（保留筛选）</span>
+        </RouterLink>
+        <RouterLink
+          class="btn"
+          :to="{ name: 'hazard-edit', params: { id: hazard.id }, query: { ...route.query } }"
+        >编辑</RouterLink>
         <button class="btn btn-danger" type="button" @click="remove">删除</button>
       </template>
     </PageHeader>

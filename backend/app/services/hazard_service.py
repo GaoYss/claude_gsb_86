@@ -106,37 +106,65 @@ def get_hazard(db: Session, hazard_id: int) -> Hazard:
     return hazard
 
 
-def list_hazards(
-    db: Session,
-    *,
-    reservoir_id: int | None = None,
-    inspection_id: int | None = None,
-    category: str | None = None,
-    severity: str | None = None,
-    status: str | None = None,
-    source: str | None = None,
-    keyword: str | None = None,
-    overdue_only: bool = False,
-    open_only: bool = False,
-    page: int = 1,
-    page_size: int = 20,
-) -> tuple[list[Hazard], int]:
+@dataclass(frozen=True)
+class HazardFilter:
+    """隐患列表 / 导出 / 汇总共用的筛选条件，保证各处口径一致。"""
+
+    reservoir_id: int | None = None
+    inspection_id: int | None = None
+    category: str | None = None
+    severity: str | None = None
+    status: str | None = None
+    source: str | None = None
+    keyword: str | None = None
+    overdue_only: bool = False
+    open_only: bool = False
+    discovered_from: date | None = None
+    discovered_to: date | None = None
+
+
+def validate_filter(filters: HazardFilter) -> None:
+    """检查筛选条件之间是否互相冲突；冲突直接抛业务错误而不是返回空表。"""
+    conflicts: list[str] = []
+
+    if (
+        filters.discovered_from
+        and filters.discovered_to
+        and filters.discovered_from > filters.discovered_to
+    ):
+        conflicts.append(
+            f"发现日期范围不合法：起始日期（{filters.discovered_from.isoformat()}）"
+            f"晚于截止日期（{filters.discovered_to.isoformat()}）"
+        )
+
+    if filters.status == HazardStatus.CLOSED.value:
+        if filters.open_only:
+            conflicts.append("整改状态选择了「已销号」，同时又勾选了「仅看未销号」，二者互相矛盾")
+        if filters.overdue_only:
+            conflicts.append("已销号隐患不存在逾期，「状态=已销号」与「仅看逾期」无法同时生效")
+
+    if conflicts:
+        raise InvalidOperationError("筛选条件存在冲突：" + "；".join(conflicts))
+
+
+def _apply_conditions(stmt, filters: HazardFilter):
+    """把筛选条件追加到查询语句上；count、分页列表、导出共用这一个入口。"""
     conditions = []
-    if reservoir_id:
-        conditions.append(Hazard.reservoir_id == reservoir_id)
-    if inspection_id:
-        conditions.append(Hazard.inspection_id == inspection_id)
-    if category:
-        conditions.append(Hazard.category == category)
-    if severity:
-        conditions.append(Hazard.severity == severity)
-    if status:
-        conditions.append(Hazard.status == status)
-    if source:
-        conditions.append(Hazard.source == source)
-    if open_only:
+    if filters.reservoir_id:
+        conditions.append(Hazard.reservoir_id == filters.reservoir_id)
+    if filters.inspection_id:
+        conditions.append(Hazard.inspection_id == filters.inspection_id)
+    if filters.category:
+        conditions.append(Hazard.category == filters.category)
+    if filters.severity:
+        conditions.append(Hazard.severity == filters.severity)
+    if filters.status:
+        conditions.append(Hazard.status == filters.status)
+    if filters.source:
+        conditions.append(Hazard.source == filters.source)
+    if filters.open_only:
         conditions.append(Hazard.status != HazardStatus.CLOSED.value)
-    if overdue_only:
+    if filters.overdue_only:
         conditions.append(
             and_(
                 Hazard.status != HazardStatus.CLOSED.value,
@@ -144,8 +172,12 @@ def list_hazards(
                 Hazard.deadline < date.today(),
             )
         )
-    if keyword:
-        like = f"%{keyword.strip()}%"
+    if filters.discovered_from:
+        conditions.append(Hazard.discovered_on >= filters.discovered_from)
+    if filters.discovered_to:
+        conditions.append(Hazard.discovered_on <= filters.discovered_to)
+    if filters.keyword:
+        like = f"%{filters.keyword.strip()}%"
         conditions.append(
             or_(
                 Hazard.title.like(like),
@@ -154,22 +186,58 @@ def list_hazards(
                 Hazard.assignee.like(like),
             )
         )
+    return stmt.where(*conditions)
 
-    total = db.scalar(select(func.count()).select_from(Hazard).where(*conditions)) or 0
+
+# 列表与导出统一的排序口径：未销号在前、期限近的在前、同序按登记时间倒序
+_HAZARD_ORDER = (
+    Hazard.status.desc(),
+    Hazard.deadline.is_(None),
+    Hazard.deadline.asc(),
+    Hazard.id.desc(),
+)
+
+
+def count_hazards(db: Session, filters: HazardFilter) -> int:
+    """按筛选条件统计总数；顶部计数、分页 total、导出行数全部以这里为准。"""
+    stmt = _apply_conditions(select(func.count()).select_from(Hazard), filters)
+    return db.scalar(stmt) or 0
+
+
+def list_hazards(
+    db: Session,
+    filters: HazardFilter,
+    *,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[Hazard], int]:
+    """分页查询隐患；total 与当前页数据使用同一组 WHERE 条件计算。"""
+    validate_filter(filters)
+    total = count_hazards(db, filters)
     rows = db.scalars(
-        select(Hazard)
-        .options(selectinload(Hazard.reservoir))
-        .where(*conditions)
-        .order_by(
-            Hazard.status.desc(),
-            Hazard.deadline.is_(None),
-            Hazard.deadline.asc(),
-            Hazard.id.desc(),
+        _apply_conditions(
+            select(Hazard).options(selectinload(Hazard.reservoir)),
+            filters,
         )
+        .order_by(*_HAZARD_ORDER)
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
     return list(rows), total
+
+
+def iterate_hazards(db: Session, filters: HazardFilter, *, limit: int) -> list[Hazard]:
+    """导出用：按同一筛选条件与排序取全量（调用方负责限制规模）。"""
+    validate_filter(filters)
+    rows = db.scalars(
+        _apply_conditions(
+            select(Hazard).options(selectinload(Hazard.reservoir)),
+            filters,
+        )
+        .order_by(*_HAZARD_ORDER)
+        .limit(limit)
+    ).all()
+    return list(rows)
 
 
 def create_hazard(db: Session, payload: HazardCreate) -> Hazard:

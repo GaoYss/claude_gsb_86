@@ -133,6 +133,15 @@ npm run dev                       # http://localhost:5173 ，/api 自动代理�
 **逾期判定**：存在整改期限且未销号，且当前日期已超过期限，即视为逾期；列表支持 `overdue_only=true`
 只筛逾期隐患，总览页单独统计逾期数量。
 
+**隐患组合筛选**：列表、顶部计数、`/hazards/export` 导出共用同一组筛选条件（水库、部位/类别、等级、
+整改状态、来源、关键字、发现日期范围 `discovered_from` / `discovered_to`、仅未销号、仅逾期），
+三者口径一致——导出行数恒等于列表 `total`，不会出现条数与汇总对不上。筛选条件保存在 URL query 中，
+从列表下钻到详情页（及详情页的编辑页）后可一键带条件返回；清空条件即回到默认视图。
+条件互相冲突时（如「状态=已销号」同时勾选「仅看逾期 / 仅看未销号」，或发现日期起止倒置），
+接口返回 HTTP 422 并逐条说明冲突原因，页面直接展示警告条而不是一张看似正常的空表；
+筛选无结果时展示可操作的空状态（清空条件 / 登记隐患）。导出默认上限 10000 行（`EXPORT_MAX_ROWS`），
+超限或零结果时返回中文提示，引导收窄或清空条件。
+
 **删除保护**：水库下存在巡查或隐患记录时不允许删除（返回 422 并提示先清理关联数据）；巡查记录被隐患
 引用时不允许删除。隐患删除会级联删除其整改流水，操作前有二次确认。
 
@@ -167,6 +176,7 @@ npm run dev                       # http://localhost:5173 ，/api 自动代理�
 | GET/POST | `/inspections` | 巡查记录分页查询 / 新增（含巡查项） |
 | GET/PUT/DELETE | `/inspections/{id}` | 巡查详情 / 更新（可整体替换巡查项）/ 删除 |
 | GET/POST | `/hazards` | 隐患台账分页查询 / 登记 |
+| GET | `/hazards/export` | 按当前筛选条件导出隐患台账 CSV（与列表同源，默认上限 10000 条） |
 | GET/PUT/DELETE | `/hazards/{id}` | 隐患详情（含整改流水）/ 更新 / 删除 |
 | POST | `/hazards/{id}/rectifications` | 追加整改跟踪记录 |
 | POST | `/hazards/{id}/transition` | 整改状态流转 |
@@ -185,6 +195,7 @@ npm run dev                       # http://localhost:5173 ，/api 自动代理�
 | `CORS_ORIGINS` | `*` | 逗号分隔的允许来源 |
 | `SQL_ECHO` | `false` | 是否打印 SQL |
 | `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE` | `20` / `100` | 分页默认与上限 |
+| `EXPORT_MAX_ROWS` | `10000` | 隐患导出单次最大行数，超出时提示继续收窄筛选条件 |
 
 compose 的端口、数据库口令等项在根目录 `.env`（从 `.env.example` 复制）中覆盖：`WEB_PORT`（前端，默认 8080）、`BACKEND_PORT`（后端，默认 8000）、`TZ`（时区，默认 Asia/Shanghai）。8080 被占用时改 `WEB_PORT` 即可。
 前端环境变量见 `frontend/.env.example`：`VITE_API_BASE_URL`（默认 `/api/v1`，由代理转发）、`VITE_PROXY_TARGET`（本地开发时 /api 代理目标，默认 `http://127.0.0.1:8000`）。

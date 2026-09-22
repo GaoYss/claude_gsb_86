@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     seed_demo_data: bool = True
     default_page_size: int = 20
     max_page_size: int = 100
+    export_max_rows: int = 10000
 
     @property
     def cors_origin_list(self) -> list[str]:
