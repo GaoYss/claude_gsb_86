@@ -40,7 +40,7 @@ watch(
       <ReservoirSelect v-model="filters.reservoir_id" allow-all />
     </div>
     <div class="filter-field">
-      <span>隐患类别</span>
+      <span>隐患部位</span>
       <select v-model="filters.category" class="select">
         <option value="">全部</option>
         <option v-for="item in dictionary.options('structure_part')" :key="item.value" :value="item.value">
@@ -66,6 +66,23 @@ watch(
         </option>
       </select>
     </div>
+    <div class="filter-field">
+      <span>隐患来源</span>
+      <select v-model="filters.source" class="select">
+        <option value="">全部</option>
+        <option v-for="item in dictionary.options('hazard_source')" :key="item.value" :value="item.value">
+          {{ item.label }}
+        </option>
+      </select>
+    </div>
+    <div class="filter-field">
+      <span>发现日期从</span>
+      <input v-model="filters.discovered_from" class="input" type="date" />
+    </div>
+    <div class="filter-field">
+      <span>到</span>
+      <input v-model="filters.discovered_to" class="input" type="date" />
+    </div>
     <div class="filter-field" style="min-width: 120px">
       <span>范围</span>
       <label class="row-gap" style="font-size: 13px">
@@ -82,4 +99,3 @@ watch(
     </template>
   </FilterBar>
 </template>
-

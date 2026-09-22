@@ -4,8 +4,13 @@ import { useRoute, useRouter } from 'vue-router'
 /**
  * 列表页筛选条件：初始化时读取 URL 参数，变更后写回 URL。
  * 这样从详情页跳转（如 /inspections?reservoir_id=3）能带出过滤条件，刷新也不丢状态。
+ *
+ * @param {Record<string, unknown>} defaults 筛选默认值，同时决定字段是否参与 URL 同步
+ * @param {object} options
+ * @param {number} options.pageSize 默认每页条数
+ * @param {string[]} options.numericKeys 以数字类型还原的字段（如下拉值为 number 的水库 id）
  */
-export function useListQuery(defaults, { pageSize = 20 } = {}) {
+export function useListQuery(defaults, { pageSize = 20, numericKeys = [] } = {}) {
   const route = useRoute()
   const router = useRouter()
 
@@ -17,7 +22,14 @@ export function useListQuery(defaults, { pageSize = 20 } = {}) {
     const raw = route.query[key]
     if (raw === undefined) continue
     const value = Array.isArray(raw) ? raw[0] : raw
-    filters.value[key] = typeof fallback === 'boolean' ? value === 'true' : value
+    if (typeof fallback === 'boolean') {
+      filters.value[key] = value === 'true'
+    } else if (numericKeys.includes(key)) {
+      const parsed = Number(value)
+      filters.value[key] = value === '' || Number.isNaN(parsed) ? fallback : parsed
+    } else {
+      filters.value[key] = value
+    }
   }
   if (route.query.page) page.value = Number(route.query.page) || 1
   if (route.query.page_size) size.value = Number(route.query.page_size) || pageSize
@@ -46,4 +58,3 @@ export function useListQuery(defaults, { pageSize = 20 } = {}) {
 
   return { filters, page, pageSize: size, syncQuery, reset }
 }
-

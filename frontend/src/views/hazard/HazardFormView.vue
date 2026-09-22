@@ -6,6 +6,7 @@ import { createHazard, fetchHazard, updateHazard } from '@/api/hazards'
 import PageHeader from '@/components/common/PageHeader.vue'
 import HazardForm from '@/components/hazard/HazardForm.vue'
 import { useToastStore } from '@/stores/toast'
+import { safeReturnPath } from '@/utils/returnPath'
 
 const route = useRoute()
 const router = useRouter()
@@ -39,12 +40,21 @@ async function submit(payload) {
       ? await updateHazard(route.params.id, payload)
       : await createHazard(payload)
     toast.success(isEdit.value ? '隐患信息已更新' : `隐患 ${saved.code} 已登记`)
-    router.replace({ name: 'hazard-detail', params: { id: saved.id } })
+    // 回到详情页时继续携带来源地址，保证从列表下钻的筛选条件一路不丢
+    const returnPath = safeReturnPath(route.query.return)
+    const query = returnPath ? { return: returnPath } : {}
+    router.replace({ name: 'hazard-detail', params: { id: saved.id }, query })
   } catch (error) {
     toast.error(error.message)
   } finally {
     submitting.value = false
   }
+}
+
+function cancel() {
+  const returnPath = safeReturnPath(route.query.return)
+  if (returnPath) router.push(returnPath)
+  else router.back()
 }
 </script>
 
@@ -63,7 +73,7 @@ async function submit(payload) {
       :preset-reservoir-id="presetReservoirId"
       :preset-inspection-id="presetInspectionId"
       @submit="submit"
-      @cancel="router.back()"
+      @cancel="cancel"
     />
   </div>
 </template>

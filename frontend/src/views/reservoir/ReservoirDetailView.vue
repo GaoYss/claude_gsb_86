@@ -116,12 +116,14 @@ async function remove() {
         :value="stats.hazard_open"
         :hint="`隐患总数 ${stats.hazard_total} 条`"
         :tone="stats.hazard_open ? 'warn' : 'ok'"
+        :to="{ name: 'hazard-list', query: { reservoir_id: reservoir.id, open_only: 'true' } }"
       />
       <StatCard
         label="逾期未整改"
         :value="stats.hazard_overdue"
         :hint="`已销号 ${stats.hazard_closed} 条`"
         :tone="stats.hazard_overdue ? 'danger' : 'ok'"
+        :to="{ name: 'hazard-list', query: { reservoir_id: reservoir.id, overdue_only: 'true' } }"
       />
     </div>
 

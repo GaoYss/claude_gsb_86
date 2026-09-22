@@ -11,7 +11,7 @@ from app.models.enums import (
     RectificationAction,
     StructurePart,
 )
-from app.schemas.common import is_overdue
+from app.schemas.common import Page, is_overdue
 from app.schemas.reservoir import ReservoirBrief
 
 
@@ -117,4 +117,18 @@ class HazardDetail(HazardRead):
     """隐患详情：附带整改跟踪流水。"""
 
     rectifications: list[HazardRectificationRead] = Field(default_factory=list)
+
+
+class HazardListSummary(BaseModel):
+    """列表顶部计数：与列表、导出使用同一份筛选条件。"""
+
+    total: int = Field(description="符合筛选条件的隐患总数")
+    open: int = Field(description="其中未销号数")
+    overdue: int = Field(description="其中逾期未整改数")
+
+
+class HazardPage(Page[HazardRead]):
+    """隐患分页响应：附带同条件汇总计数，保证条数与顶部计数同源。"""
+
+    summary: HazardListSummary
 

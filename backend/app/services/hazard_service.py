@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.errors import ConflictError, InvalidOperationError, NotFoundError
@@ -19,6 +19,76 @@ from app.schemas.hazard import (
 )
 from app.services import reservoir_service
 from app.services.helpers import enum_to_value, next_code
+
+
+@dataclass(frozen=True)
+class HazardFilter:
+    """隐患列表 / 导出 / 汇总共用的同一份筛选条件。
+
+    列表条数、顶部计数、导出内容都基于本条件生成，保证三者同源、不会对不上。
+    """
+
+    reservoir_id: int | None = None
+    inspection_id: int | None = None
+    category: str | None = None
+    severity: str | None = None
+    status: str | None = None
+    source: str | None = None
+    keyword: str | None = None
+    open_only: bool = False
+    overdue_only: bool = False
+    discovered_from: date | None = None
+    discovered_to: date | None = None
+
+    def apply(self, stmt):
+        """把筛选条件应用到任意以 Hazard 为源的语句（列表 / 计数 / 导出 / 分布）。"""
+        if self.reservoir_id:
+            stmt = stmt.where(Hazard.reservoir_id == self.reservoir_id)
+        if self.inspection_id:
+            stmt = stmt.where(Hazard.inspection_id == self.inspection_id)
+        if self.category:
+            stmt = stmt.where(Hazard.category == self.category)
+        if self.severity:
+            stmt = stmt.where(Hazard.severity == self.severity)
+        if self.status:
+            stmt = stmt.where(Hazard.status == self.status)
+        if self.source:
+            stmt = stmt.where(Hazard.source == self.source)
+        if self.open_only:
+            stmt = stmt.where(Hazard.status != HazardStatus.CLOSED.value)
+        if self.overdue_only:
+            stmt = stmt.where(
+                Hazard.status != HazardStatus.CLOSED.value,
+                Hazard.deadline.is_not(None),
+                Hazard.deadline < date.today(),
+            )
+        if self.discovered_from:
+            stmt = stmt.where(Hazard.discovered_on >= self.discovered_from)
+        if self.discovered_to:
+            stmt = stmt.where(Hazard.discovered_on <= self.discovered_to)
+        if self.keyword:
+            like = f"%{self.keyword.strip()}%"
+            stmt = stmt.where(
+                or_(
+                    Hazard.title.like(like),
+                    Hazard.code.like(like),
+                    Hazard.description.like(like),
+                    Hazard.assignee.like(like),
+                )
+            )
+        return stmt
+
+    @property
+    def conflicts(self) -> list[str]:
+        """条件之间互相冲突时返回逐条中文说明；为空表示没有冲突。"""
+        messages: list[str] = []
+        if self.status == HazardStatus.CLOSED.value and self.open_only:
+            messages.append("「整改状态 = 已销号」与「仅看未销号」互相冲突，不可能同时满足")
+        if self.status == HazardStatus.CLOSED.value and self.overdue_only:
+            messages.append("「整改状态 = 已销号」与「仅看逾期」互相冲突，已销号隐患不存在逾期")
+        if self.discovered_from and self.discovered_to and self.discovered_from > self.discovered_to:
+            messages.append("发现日期范围无效：开始日期晚于结束日期")
+        return messages
 
 
 @dataclass(frozen=True)
@@ -106,60 +176,26 @@ def get_hazard(db: Session, hazard_id: int) -> Hazard:
     return hazard
 
 
+def validate_filter(filters: HazardFilter) -> None:
+    """筛选条件互相冲突时直接报错（422 + 中文说明），不返回看似正常的空表。"""
+    conflicts = filters.conflicts
+    if conflicts:
+        raise InvalidOperationError("；".join(conflicts) + "，请调整筛选条件")
+
+
 def list_hazards(
     db: Session,
+    filters: HazardFilter,
     *,
-    reservoir_id: int | None = None,
-    inspection_id: int | None = None,
-    category: str | None = None,
-    severity: str | None = None,
-    status: str | None = None,
-    source: str | None = None,
-    keyword: str | None = None,
-    overdue_only: bool = False,
-    open_only: bool = False,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Hazard], int]:
-    conditions = []
-    if reservoir_id:
-        conditions.append(Hazard.reservoir_id == reservoir_id)
-    if inspection_id:
-        conditions.append(Hazard.inspection_id == inspection_id)
-    if category:
-        conditions.append(Hazard.category == category)
-    if severity:
-        conditions.append(Hazard.severity == severity)
-    if status:
-        conditions.append(Hazard.status == status)
-    if source:
-        conditions.append(Hazard.source == source)
-    if open_only:
-        conditions.append(Hazard.status != HazardStatus.CLOSED.value)
-    if overdue_only:
-        conditions.append(
-            and_(
-                Hazard.status != HazardStatus.CLOSED.value,
-                Hazard.deadline.is_not(None),
-                Hazard.deadline < date.today(),
-            )
-        )
-    if keyword:
-        like = f"%{keyword.strip()}%"
-        conditions.append(
-            or_(
-                Hazard.title.like(like),
-                Hazard.code.like(like),
-                Hazard.description.like(like),
-                Hazard.assignee.like(like),
-            )
-        )
+    """分页查询隐患。条数与下方 summarize / export_hazards 使用完全相同的条件。"""
+    validate_filter(filters)
 
-    total = db.scalar(select(func.count()).select_from(Hazard).where(*conditions)) or 0
+    total = db.scalar(filters.apply(select(func.count()).select_from(Hazard))) or 0
     rows = db.scalars(
-        select(Hazard)
-        .options(selectinload(Hazard.reservoir))
-        .where(*conditions)
+        filters.apply(select(Hazard).options(selectinload(Hazard.reservoir)))
         .order_by(
             Hazard.status.desc(),
             Hazard.deadline.is_(None),
@@ -170,6 +206,42 @@ def list_hazards(
         .limit(page_size)
     ).all()
     return list(rows), total
+
+
+def summarize_hazards(db: Session, filters: HazardFilter) -> dict[str, int]:
+    """同一筛选条件下的顶部计数：匹配总数、其中未销号数、其中逾期数。"""
+    validate_filter(filters)
+
+    total = db.scalar(filters.apply(select(func.count()).select_from(Hazard))) or 0
+    open_count = db.scalar(
+        filters.apply(select(func.count()).select_from(Hazard)).where(
+            Hazard.status != HazardStatus.CLOSED.value
+        )
+    ) or 0
+    overdue_count = db.scalar(
+        filters.apply(select(func.count()).select_from(Hazard)).where(
+            Hazard.status != HazardStatus.CLOSED.value,
+            Hazard.deadline.is_not(None),
+            Hazard.deadline < date.today(),
+        )
+    ) or 0
+    return {"total": total, "open": open_count, "overdue": overdue_count}
+
+
+def export_hazards(db: Session, filters: HazardFilter, *, limit: int = 10000) -> list[Hazard]:
+    """按筛选条件导出隐患（不分页，带上限保护）。与列表同源，导出即所见。"""
+    validate_filter(filters)
+    rows = db.scalars(
+        filters.apply(select(Hazard).options(selectinload(Hazard.reservoir)))
+        .order_by(
+            Hazard.status.desc(),
+            Hazard.deadline.is_(None),
+            Hazard.deadline.asc(),
+            Hazard.id.desc(),
+        )
+        .limit(limit)
+    ).all()
+    return list(rows)
 
 
 def create_hazard(db: Session, payload: HazardCreate) -> Hazard:

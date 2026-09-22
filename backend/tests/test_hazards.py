@@ -1,5 +1,7 @@
 """隐患登记与整改跟踪接口测试。"""
 
+import csv
+import io
 from datetime import date, timedelta
 
 from tests.conftest import API
@@ -191,4 +193,247 @@ def test_hazard_filters_and_delete(client, make_reservoir):
 
 def test_missing_hazard_returns_404(client):
     assert client.get(f"{API}/hazards/123456").status_code == 404
+
+
+def test_discovered_date_range_filter(client, make_reservoir):
+    reservoir = make_reservoir()
+    old = _create_hazard(
+        client, reservoir["id"], title="老隐患", discovered_on="2026-03-01"
+    )
+    recent = _create_hazard(
+        client, reservoir["id"], title="新隐患", discovered_on="2026-08-01"
+    )
+
+    page = client.get(
+        f"{API}/hazards",
+        params={"discovered_from": "2026-07-01", "discovered_to": "2026-12-31"},
+    ).json()
+    assert page["total"] == 1
+    assert page["items"][0]["id"] == recent["id"]
+
+    inclusive = client.get(
+        f"{API}/hazards", params={"discovered_from": "2026-03-01"}
+    ).json()
+    assert {item["id"] for item in inclusive["items"]} == {old["id"], recent["id"]}
+
+
+def test_conflicting_filters_return_422_with_message(client, make_reservoir):
+    reservoir = make_reservoir()
+    _create_hazard(client, reservoir["id"])
+
+    conflict_status_open = client.get(
+        f"{API}/hazards", params={"status": "closed", "open_only": "true"}
+    )
+    assert conflict_status_open.status_code == 422
+    assert "冲突" in conflict_status_open.json()["detail"]
+
+    conflict_status_overdue = client.get(
+        f"{API}/hazards", params={"status": "closed", "overdue_only": "true"}
+    )
+    assert conflict_status_overdue.status_code == 422
+    assert "逾期" in conflict_status_overdue.json()["detail"]
+
+    conflict_date_range = client.get(
+        f"{API}/hazards",
+        params={"discovered_from": "2026-09-01", "discovered_to": "2026-01-01"},
+    )
+    assert conflict_date_range.status_code == 422
+    assert "开始日期晚于结束日期" in conflict_date_range.json()["detail"]
+
+    # 导出接口同样拦截冲突，不会导出一张看似正常的空表
+    export_conflict = client.get(
+        f"{API}/hazards/export", params={"status": "closed", "open_only": "true"}
+    )
+    assert export_conflict.status_code == 422
+
+
+def test_list_summary_matches_total(client, make_reservoir):
+    """顶部汇总计数与列表条数同源。"""
+    reservoir = make_reservoir()
+    _create_hazard(
+        client,
+        reservoir["id"],
+        title="逾期的一般隐患",
+        severity="general",
+        deadline=(date.today() - timedelta(days=3)).isoformat(),
+    )
+    _create_hazard(
+        client,
+        reservoir["id"],
+        title="未到期重大隐患",
+        severity="major",
+        deadline=(date.today() + timedelta(days=3)).isoformat(),
+    )
+    _create_hazard(
+        client,
+        reservoir["id"],
+        title="已销号隐患",
+        deadline=(date.today() - timedelta(days=10)).isoformat(),
+    )
+    # 把第三条销号
+    target = client.get(f"{API}/hazards", params={"keyword": "已销号隐患"}).json()["items"][0]
+    client.post(
+        f"{API}/hazards/{target['id']}/transition",
+        json={"target_status": "rectifying"},
+    )
+    client.post(
+        f"{API}/hazards/{target['id']}/transition",
+        json={"target_status": "pending_acceptance", "content": "整改完成"},
+    )
+    closed = client.post(
+        f"{API}/hazards/{target['id']}/transition", json={"target_status": "closed"}
+    )
+    assert closed.status_code == 200
+
+    page = client.get(f"{API}/hazards", params={"reservoir_id": reservoir["id"]}).json()
+    assert page["total"] == 3
+    assert page["summary"] == {"total": 3, "open": 2, "overdue": 1}
+
+    # 叠加等级条件后，条数与汇总仍一致
+    major_page = client.get(
+        f"{API}/hazards", params={"severity": "major"}
+    ).json()
+    assert major_page["total"] == major_page["summary"]["total"] == 1
+    assert major_page["summary"]["open"] == 1
+    assert major_page["summary"]["overdue"] == 0
+
+
+def test_export_csv_uses_same_filters_as_list(client, make_reservoir):
+    """导出内容与列表同条件同源。"""
+    reservoir = make_reservoir()
+    other = make_reservoir(name="另一座水库", code="SK-TEST-OTHER")
+    mine = _create_hazard(client, reservoir["id"], title="本库隐患", severity="major")
+    _create_hazard(client, other["id"], title="外库隐患", severity="major")
+
+    params = {"reservoir_id": reservoir["id"], "severity": "major"}
+    page = client.get(f"{API}/hazards", params=params).json()
+    assert page["total"] == 1
+
+    response = client.get(f"{API}/hazards/export", params=params)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+
+    text = response.content.decode("utf-8-sig")
+    reader = csv.reader(io.StringIO(text))
+    rows = list(reader)
+    assert rows[0][0] == "隐患编号"
+    assert len(rows) == 2  # 表头 + 1 条
+    assert rows[1][0] == mine["code"]
+    assert rows[1][1] == reservoir["name"]
+    assert rows[1][4] == "重大隐患"
+
+    # 不带条件时导出全部
+    all_rows = list(
+        csv.reader(io.StringIO(client.get(f"{API}/hazards/export").content.decode("utf-8-sig")))
+    )
+    assert len(all_rows) == 3
+
+
+def test_combined_filters_stay_consistent_at_scale(client, make_reservoir):
+    """隐患攒到较大规模后，组合筛选的列表条数、汇总、导出三者必须一致。"""
+    reservoir = make_reservoir()
+    other_reservoir = make_reservoir(name="干扰水库", code="SK-TEST-NOISE")
+
+    severities = ["general", "serious", "major"]
+    categories = ["dam_body", "spillway", "outlet", "seepage", "slope"]
+    statuses = ["registered", "rectifying", "pending_acceptance", "closed"]
+    created = []
+    for i in range(240):
+        severity = severities[i % 3]
+        category = categories[i % 5]
+        deadline = (
+            (date.today() + timedelta(days=(i % 7) - 3)).isoformat()
+            if i % 4
+            else None
+        )
+        hazard = _create_hazard(
+            client,
+            reservoir["id"],
+            title=f"规模隐患{i:03d}",
+            severity=severity,
+            category=category,
+            deadline=deadline,
+        )
+        created.append(hazard)
+
+    # 干扰数据：另一座水库的 60 条，任何条件组合都不应混入
+    for i in range(60):
+        _create_hazard(client, other_reservoir["id"], title=f"干扰隐患{i:03d}")
+
+    # 把约一半隐患推进到各种状态，closed 约占 1/4
+    for idx, hazard in enumerate(created):
+        target_status = statuses[idx % 4]
+        current = client.get(f"{API}/hazards/{hazard['id']}").json()["status"]
+        order = ["registered", "rectifying", "pending_acceptance", "closed"]
+        steps = order.index(target_status) - order.index(current)
+        for step in range(steps):
+            if step == 0:
+                body = {"target_status": "rectifying"}
+            elif step == 1:
+                body = {"target_status": "pending_acceptance", "content": "提交验收"}
+            else:
+                body = {"target_status": "closed"}
+            resp = client.post(f"{API}/hazards/{hazard['id']}/transition", json=body)
+            assert resp.status_code == 200, resp.text
+
+    # 多条件组合：水库 + 等级 + 部位 + 未销号 + 日期范围
+    params = {
+        "reservoir_id": reservoir["id"],
+        "severity": "major",
+        "category": "dam_body",
+        "open_only": "true",
+        "discovered_from": "2000-01-01",
+    }
+    page = client.get(f"{API}/hazards", params=params).json()
+
+    # 与无分页全量拉取对账，避免只验证总数自洽
+    all_matched = client.get(
+        f"{API}/hazards",
+        params={**params, "page_size": 100, "page": 1},
+    ).json()
+    assert all_matched["pages"] == 1
+    expected_ids = {
+        item["id"]
+        for item in all_matched["items"]
+        if item["severity"] == "major"
+        and item["category"] == "dam_body"
+        and item["status"] != "closed"
+    }
+    assert page["total"] == len(expected_ids)
+    assert page["summary"]["total"] == len(expected_ids)
+    assert page["summary"]["open"] == len(expected_ids)
+    assert all(
+        item["severity"] == "major"
+        and item["category"] == "dam_body"
+        and item["status"] != "closed"
+        for item in page["items"]
+    )
+
+    export_text = client.get(f"{API}/hazards/export", params=params).content.decode(
+        "utf-8-sig"
+    )
+    export_rows = list(csv.reader(io.StringIO(export_text)))
+    assert len(export_rows) - 1 == page["total"] == page["summary"]["total"]
+    exported_codes = {row[0] for row in export_rows[1:]}
+    page_codes = {
+        item["code"] for item in all_matched["items"] if item["id"] in expected_ids
+    }
+    assert exported_codes == page_codes
+
+    # 只看逾期：列表、汇总、导出继续同源
+    overdue_params = {"reservoir_id": reservoir["id"], "overdue_only": "true"}
+    overdue_page = client.get(f"{API}/hazards", params=overdue_params).json()
+    overdue_export = list(
+        csv.reader(
+            io.StringIO(
+                client.get(f"{API}/hazards/export", params=overdue_params)
+                .content.decode("utf-8-sig")
+            )
+        )
+    )
+    assert overdue_page["total"] == overdue_page["summary"]["total"]
+    assert overdue_page["summary"]["overdue"] == overdue_page["total"]
+    assert len(overdue_export) - 1 == overdue_page["total"]
+    assert overdue_page["total"] > 0
 

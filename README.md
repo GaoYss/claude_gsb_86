@@ -30,7 +30,7 @@
 │   │   ├── schemas/             # 出入参校验与序列化
 │   │   ├── services/            # 业务逻辑（含隐患状态机，可脱离 HTTP 单独测试）
 │   │   └── main.py              # 应用装配
-│   ├── tests/                   # pytest 接口测试（30 个用例）
+│   ├── tests/                   # pytest 接口测试（35 个用例）
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/                    # Vue 3 单页应用
@@ -133,6 +133,12 @@ npm run dev                       # http://localhost:5173 ，/api 自动代理�
 **逾期判定**：存在整改期限且未销号，且当前日期已超过期限，即视为逾期；列表支持 `overdue_only=true`
 只筛逾期隐患，总览页单独统计逾期数量。
 
+**隐患组合筛选**：列表、顶部计数、CSV 导出共用后端同一份 `HazardFilter` 条件构造，三者必然同源；
+支持水库、部位、等级、状态、来源、关键字、仅看未销号 / 逾期、发现日期范围任意组合，筛选条件通过
+URL 同步，下钻详情与导出都会携带当前条件，重置即回默认视图。条件互相冲突（如「状态=已销号 + 仅看
+未销号」「开始日期晚于结束日期」）时返回 422 并在页面红色横幅直示冲突点，而不是返回一张看似正常的
+空表；无结果时区分「暂无隐患」与「筛选过严」并给出清空筛选 / 登记隐患入口。
+
 **删除保护**：水库下存在巡查或隐患记录时不允许删除（返回 422 并提示先清理关联数据）；巡查记录被隐患
 引用时不允许删除。隐患删除会级联删除其整改流水，操作前有二次确认。
 
@@ -166,7 +172,8 @@ npm run dev                       # http://localhost:5173 ，/api 自动代理�
 | GET | `/reservoirs/{id}/stats` | 单库巡查与隐患统计 |
 | GET/POST | `/inspections` | 巡查记录分页查询 / 新增（含巡查项） |
 | GET/PUT/DELETE | `/inspections/{id}` | 巡查详情 / 更新（可整体替换巡查项）/ 删除 |
-| GET/POST | `/hazards` | 隐患台账分页查询 / 登记 |
+| GET/POST | `/hazards` | 隐患台账分页查询（响应附带同条件 `summary` 计数）/ 登记 |
+| GET | `/hazards/export` | 按当前筛选条件导出隐患 CSV（与列表同源，含 UTF-8 BOM） |
 | GET/PUT/DELETE | `/hazards/{id}` | 隐患详情（含整改流水）/ 更新 / 删除 |
 | POST | `/hazards/{id}/rectifications` | 追加整改跟踪记录 |
 | POST | `/hazards/{id}/transition` | 整改状态流转 |
@@ -193,7 +200,7 @@ compose 的端口、数据库口令等项在根目录 `.env`（从 `.env.example
 
 ```bash
 cd backend
-python -m pytest            # 30 个接口用例：台账 CRUD、编号生成、巡查结论推导、状态机、逾期、统计
+python -m pytest            # 35 个接口用例：台账 CRUD、编号生成、巡查结论推导、状态机、逾期、组合筛选与导出同源、大规模一致性
 ```
 
 ```bash

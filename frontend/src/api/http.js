@@ -44,5 +44,20 @@ function toAppError(error) {
 }
 
 // 统一返回响应体，出错时抛出带 status 的 Error，视图层只需 catch 后提示
-http.interceptors.response.use((response) => response.data, (error) => Promise.reject(toAppError(error)))
+http.interceptors.response.use(
+  (response) => response.data,
+  async (error) => {
+    // 以 blob 方式请求（如导出）出错时，错误体也是 Blob，需要先解析回 JSON 才能取到中文提示
+    if (error.response?.data instanceof Blob) {
+      let text = ''
+      try {
+        text = await error.response.data.text()
+        error.response.data = JSON.parse(text)
+      } catch {
+        error.response.data = text
+      }
+    }
+    return Promise.reject(toAppError(error))
+  },
+)
 

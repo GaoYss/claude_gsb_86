@@ -55,38 +55,57 @@ onMounted(async () => {
         label="水库总数"
         :value="summary.reservoir_total"
         :hint="`需关注 / 存在险情 ${summary.reservoir_attention} 座`"
+        to="/reservoirs"
       />
       <StatCard
         label="巡查记录"
         :value="summary.inspection_total"
         :hint="`近 30 天 ${summary.inspection_last_30_days} 次`"
+        to="/inspections"
       />
       <StatCard
         label="未销号隐患"
         :value="summary.hazard_open"
         :hint="`隐患总数 ${summary.hazard_total} 条`"
         :tone="summary.hazard_open ? 'warn' : 'ok'"
+        to="/hazards?open_only=true"
       />
       <StatCard
         label="逾期未整改"
         :value="summary.hazard_overdue"
         hint="超过整改期限且未销号"
         :tone="summary.hazard_overdue ? 'danger' : 'ok'"
+        to="/hazards?overdue_only=true"
       />
     </div>
 
     <div class="split-2">
-      <BaseCard title="隐患状态分布" subtitle="按整改流程统计">
-        <DistributionList :items="summary.hazard_by_status" tone-key="hazard_status" />
+      <BaseCard title="隐患状态分布" subtitle="按整改流程统计，点击可下钻">
+        <DistributionList
+          :items="summary.hazard_by_status"
+          tone-key="hazard_status"
+          :to-for="(item) => ({ name: 'hazard-list', query: { status: item.value } })"
+        />
       </BaseCard>
-      <BaseCard title="隐患等级分布" subtitle="重大 / 较大隐患需重点跟踪">
-        <DistributionList :items="summary.hazard_by_severity" tone-key="hazard_severity" />
+      <BaseCard title="隐患等级分布" subtitle="重大 / 较大隐患需重点跟踪，点击可下钻">
+        <DistributionList
+          :items="summary.hazard_by_severity"
+          tone-key="hazard_severity"
+          :to-for="(item) => ({ name: 'hazard-list', query: { severity: item.value } })"
+        />
       </BaseCard>
-      <BaseCard title="巡查类型分布" subtitle="日常、汛期、专项与应急巡查">
-        <DistributionList :items="summary.inspection_by_type" />
+      <BaseCard title="巡查类型分布" subtitle="日常、汛期、专项与应急巡查，点击可下钻">
+        <DistributionList
+          :items="summary.inspection_by_type"
+          :to-for="(item) => ({ name: 'inspection-list', query: { inspect_type: item.value } })"
+        />
       </BaseCard>
-      <BaseCard title="水库运行状态" subtitle="按台账运行状态统计">
-        <DistributionList :items="summary.reservoir_by_status" tone-key="reservoir_status" />
+      <BaseCard title="水库运行状态" subtitle="按台账运行状态统计，点击可下钻">
+        <DistributionList
+          :items="summary.reservoir_by_status"
+          tone-key="reservoir_status"
+          :to-for="(item) => ({ name: 'reservoir-list', query: { status: item.value } })"
+        />
       </BaseCard>
     </div>
 

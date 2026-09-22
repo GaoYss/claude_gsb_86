@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { addRectification, deleteHazard, fetchHazard, transitionHazard } from '@/api/hazards'
@@ -13,6 +13,7 @@ import { useConfirmStore } from '@/stores/confirm'
 import { useDictionaryStore } from '@/stores/dictionary'
 import { useToastStore } from '@/stores/toast'
 import { deadlineHint, formatDate } from '@/utils/format'
+import { safeReturnPath } from '@/utils/returnPath'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,10 +69,21 @@ async function remove() {
   try {
     await deleteHazard(hazard.value.id)
     toast.success('隐患已删除')
-    router.replace({ name: 'hazard-list' })
+    // 删除后回到来源列表（保留筛选条件），没有来源则回隐患台账
+    router.replace(safeReturnPath(route.query.return) || { name: 'hazard-list' })
   } catch (error) {
     toast.error(error.message)
   }
+}
+
+// 从列表下钻时携带 return，返回后原筛选条件、分页原样恢复
+const returnQuery = computed(() => {
+  const path = safeReturnPath(route.query.return)
+  return path ? { return: path } : {}
+})
+
+function backToList() {
+  router.push(safeReturnPath(route.query.return) || { name: 'hazard-list' })
 }
 </script>
 
@@ -88,7 +100,13 @@ async function remove() {
         <span v-if="hazard.is_overdue" class="tag tag-overdue">逾期未整改</span>
       </template>
       <template #actions>
-        <RouterLink class="btn" :to="`/hazards/${hazard.id}/edit`">编辑</RouterLink>
+        <button class="btn" type="button" @click="backToList">返回列表</button>
+        <RouterLink
+          class="btn"
+          :to="{ name: 'hazard-edit', params: { id: hazard.id }, query: returnQuery }"
+        >
+          编辑
+        </RouterLink>
         <button class="btn btn-danger" type="button" @click="remove">删除</button>
       </template>
     </PageHeader>
